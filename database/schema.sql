@@ -141,6 +141,51 @@ CREATE TABLE IF NOT EXISTS bom_versions (
   INDEX idx_bomv_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS pof_number_sequences (
+  pof_date CHAR(8) NOT NULL PRIMARY KEY,
+  last_seq INT UNSIGNED NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS prod_order_forms (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  pof_number VARCHAR(32) NOT NULL UNIQUE,
+  customer_po_id INT UNSIGNED NOT NULL UNIQUE,
+  status ENUM('DRAFT', 'RELEASED', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
+  supervisor_user_id INT UNSIGNED NULL,
+  issued_by_user_id INT UNSIGNED NULL,
+  notes TEXT NULL,
+  created_by INT UNSIGNED NULL,
+  released_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pof_cpo FOREIGN KEY (customer_po_id) REFERENCES customer_pos(id),
+  CONSTRAINT fk_pof_supervisor FOREIGN KEY (supervisor_user_id) REFERENCES users(id),
+  CONSTRAINT fk_pof_issued_by FOREIGN KEY (issued_by_user_id) REFERENCES users(id),
+  CONSTRAINT fk_pof_created_by FOREIGN KEY (created_by) REFERENCES users(id),
+  INDEX idx_pof_status (status),
+  INDEX idx_pof_cpo (customer_po_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS prod_order_form_lines (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  prod_order_form_id INT UNSIGNED NOT NULL,
+  customer_po_line_id INT UNSIGNED NOT NULL,
+  line_no INT UNSIGNED NOT NULL DEFAULT 1,
+  product_number VARCHAR(64) NOT NULL,
+  qty_to_produce DECIMAL(14, 2) NOT NULL DEFAULT 1,
+  unit VARCHAR(32) NOT NULL DEFAULT 'pcs',
+  bom_version_id INT UNSIGNED NULL,
+  start_date DATE NULL,
+  end_date DATE NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pofl_pof FOREIGN KEY (prod_order_form_id) REFERENCES prod_order_forms(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pofl_cpo_line FOREIGN KEY (customer_po_line_id) REFERENCES customer_po_lines(id),
+  CONSTRAINT fk_pofl_bom_version FOREIGN KEY (bom_version_id) REFERENCES bom_versions(id) ON DELETE SET NULL,
+  UNIQUE KEY uq_pofl_line (prod_order_form_id, customer_po_line_id),
+  INDEX idx_pofl_pof (prod_order_form_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS bom_components (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   fg_id INT UNSIGNED NOT NULL,

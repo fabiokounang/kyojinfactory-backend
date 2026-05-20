@@ -237,6 +237,70 @@ async function applyPatches(connection, dbName) {
     }
   }
 
+  // --- POF tables ---
+  if (!(await tableExists(connection, dbName, 'pof_number_sequences'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.pof_number_sequences (
+        pof_date CHAR(8) NOT NULL PRIMARY KEY,
+        last_seq INT UNSIGNED NOT NULL DEFAULT 0
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel pof_number_sequences dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'prod_order_forms'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.prod_order_forms (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        pof_number VARCHAR(32) NOT NULL UNIQUE,
+        customer_po_id INT UNSIGNED NOT NULL UNIQUE,
+        status ENUM('DRAFT', 'RELEASED', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
+        supervisor_user_id INT UNSIGNED NULL,
+        issued_by_user_id INT UNSIGNED NULL,
+        notes TEXT NULL,
+        created_by INT UNSIGNED NULL,
+        released_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_pof_cpo FOREIGN KEY (customer_po_id) REFERENCES \`${dbName}\`.customer_pos(id),
+        CONSTRAINT fk_pof_supervisor FOREIGN KEY (supervisor_user_id) REFERENCES \`${dbName}\`.users(id),
+        CONSTRAINT fk_pof_issued_by FOREIGN KEY (issued_by_user_id) REFERENCES \`${dbName}\`.users(id),
+        CONSTRAINT fk_pof_created_by FOREIGN KEY (created_by) REFERENCES \`${dbName}\`.users(id),
+        INDEX idx_pof_status (status),
+        INDEX idx_pof_cpo (customer_po_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel prod_order_forms dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'prod_order_form_lines'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.prod_order_form_lines (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        prod_order_form_id INT UNSIGNED NOT NULL,
+        customer_po_line_id INT UNSIGNED NOT NULL,
+        line_no INT UNSIGNED NOT NULL DEFAULT 1,
+        product_number VARCHAR(64) NOT NULL,
+        qty_to_produce DECIMAL(14, 2) NOT NULL DEFAULT 1,
+        unit VARCHAR(32) NOT NULL DEFAULT 'pcs',
+        bom_version_id INT UNSIGNED NULL,
+        start_date DATE NULL,
+        end_date DATE NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_pofl_pof FOREIGN KEY (prod_order_form_id)
+          REFERENCES \`${dbName}\`.prod_order_forms(id) ON DELETE CASCADE,
+        CONSTRAINT fk_pofl_cpo_line FOREIGN KEY (customer_po_line_id)
+          REFERENCES \`${dbName}\`.customer_po_lines(id),
+        CONSTRAINT fk_pofl_bom_version FOREIGN KEY (bom_version_id)
+          REFERENCES \`${dbName}\`.bom_versions(id) ON DELETE SET NULL,
+        UNIQUE KEY uq_pofl_line (prod_order_form_id, customer_po_line_id),
+        INDEX idx_pofl_pof (prod_order_form_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel prod_order_form_lines dibuat.');
+  }
+
   if (!(await tableExists(connection, dbName, 'bom_components'))) {
     await connection.query(`
       CREATE TABLE IF NOT EXISTS \`${dbName}\`.bom_components (

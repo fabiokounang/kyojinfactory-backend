@@ -393,4 +393,13 @@ module.exports = {
   updateComponent,
   deleteComponent,
   childrenCount,
+  findActiveVersionByFgId,
 };
+
+async function findActiveVersionByFgId(fgId) {
+  const [rows] = await pool.execute(
+    `SELECT ${VERSION_COLS} FROM bom_versions WHERE fg_id = :fg_id AND status = 'ACTIVE' LIMIT 1`,
+    { fg_id: fgId }
+  );
+  return rows[0] || null;
+}
