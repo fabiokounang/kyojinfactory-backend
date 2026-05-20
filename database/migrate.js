@@ -17,6 +17,13 @@ const dbConfig = {
   multipleStatements: true,
 };
 
+if (process.env.NODE_ENV === 'production') {
+  dbConfig.ssl = {
+      minVersion: 'TLSv1.2',
+      rejectUnauthorized: true
+  };
+}
+
 async function columnExists(connection, dbName, table, column) {
   const [rows] = await connection.query(
     `SELECT COLUMN_NAME FROM information_schema.COLUMNS
