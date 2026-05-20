@@ -8,6 +8,8 @@ const masterItemRoutes = require('./masterItemRoutes');
 const settingsRoutes = require('./settingsRoutes');
 const bomRoutes = require('./bomRoutes');
 const prodOrderFormRoutes = require('./prodOrderFormRoutes');
+const vendorRoutes = require('./vendorRoutes');
+const vendorPoRoutes = require('./vendorPoRoutes');
 const { ping } = require('../config/database');
 const { pool } = require('../config/database');
 const { authRequired } = require('../middleware/authMiddleware');
@@ -31,6 +33,8 @@ router.use('/master-items', masterItemRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/bom', bomRoutes);
 router.use('/prod-order-forms', prodOrderFormRoutes);
+router.use('/vendors', vendorRoutes);
+router.use('/vendor-pos', vendorPoRoutes);
 
 router.get('/users/assignees', authRequired, async (req, res, next) => {
   try {

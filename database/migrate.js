@@ -237,6 +237,96 @@ async function applyPatches(connection, dbName) {
     }
   }
 
+  // --- Vendor tables ---
+  if (!(await tableExists(connection, dbName, 'vendors'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.vendors (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        code VARCHAR(32) NOT NULL UNIQUE,
+        name VARCHAR(255) NOT NULL,
+        contact_person VARCHAR(255) NULL,
+        phone VARCHAR(64) NULL,
+        email VARCHAR(255) NULL,
+        address TEXT NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_vendors_name (name)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel vendors dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'pov_number_sequences'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.pov_number_sequences (
+        year INT UNSIGNED NOT NULL PRIMARY KEY,
+        last_seq INT UNSIGNED NOT NULL DEFAULT 0
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel pov_number_sequences dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'vendor_pos'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.vendor_pos (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        po_number VARCHAR(64) NOT NULL UNIQUE,
+        vendor_ref VARCHAR(128) NULL,
+        po_date DATE NOT NULL,
+        vendor_id INT UNSIGNED NOT NULL,
+        payment_mode ENUM('UPFRONT','DP_THEN_RECEIPT','ON_RECEIPT') NOT NULL DEFAULT 'ON_RECEIPT',
+        dp_amount DECIMAL(16,2) NULL,
+        dp_due_date DATE NULL,
+        balance_due_date DATE NULL,
+        payment_term_days INT UNSIGNED NOT NULL DEFAULT 14,
+        ppn_rate DECIMAL(5,2) NOT NULL DEFAULT 11.00,
+        status ENUM('DRAFT','CONFIRMED','RECEIVED','COMPLETED','CANCELLED') NOT NULL DEFAULT 'DRAFT',
+        notes TEXT NULL,
+        created_by INT UNSIGNED NULL,
+        confirmed_at TIMESTAMP NULL,
+        received_at DATE NULL,
+        received_notes TEXT NULL,
+        received_by INT UNSIGNED NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_vpo_vendor FOREIGN KEY (vendor_id) REFERENCES \`${dbName}\`.vendors(id),
+        CONSTRAINT fk_vpo_created_by FOREIGN KEY (created_by) REFERENCES \`${dbName}\`.users(id),
+        CONSTRAINT fk_vpo_received_by FOREIGN KEY (received_by) REFERENCES \`${dbName}\`.users(id),
+        INDEX idx_vpo_status (status),
+        INDEX idx_vpo_vendor (vendor_id),
+        INDEX idx_vpo_po_date (po_date)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel vendor_pos dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'vendor_po_lines'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.vendor_po_lines (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        vendor_po_id INT UNSIGNED NOT NULL,
+        line_no INT UNSIGNED NOT NULL DEFAULT 1,
+        item_name VARCHAR(255) NOT NULL,
+        master_item_id INT UNSIGNED NULL,
+        qty DECIMAL(14,2) NOT NULL DEFAULT 1,
+        unit VARCHAR(32) NOT NULL DEFAULT 'pcs',
+        unit_price DECIMAL(14,2) NOT NULL DEFAULT 0,
+        ppn_included TINYINT(1) NOT NULL DEFAULT 1,
+        line_amount DECIMAL(16,2) NOT NULL DEFAULT 0,
+        std_size VARCHAR(128) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_vpol_vpo FOREIGN KEY (vendor_po_id)
+          REFERENCES \`${dbName}\`.vendor_pos(id) ON DELETE CASCADE,
+        CONSTRAINT fk_vpol_master_item FOREIGN KEY (master_item_id)
+          REFERENCES \`${dbName}\`.master_items(id) ON DELETE SET NULL,
+        INDEX idx_vpol_vpo (vendor_po_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel vendor_po_lines dibuat.');
+  }
+
   // --- POF tables ---
   if (!(await tableExists(connection, dbName, 'pof_number_sequences'))) {
     await connection.query(`
