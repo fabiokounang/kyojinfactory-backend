@@ -15,13 +15,10 @@ const opts = {
   connectionLimit: 10,
   queueLimit: 0,
   namedPlaceholders: true,
-}
-
-if (process.env.NODE_ENV === 'production') {
-  opts.ssl = {
-      minVersion: 'TLSv1.2',
-      rejectUnauthorized: true
-  };
+  ssl: {
+    minVersion: 'TLSv1.2',
+    rejectUnauthorized: true
+  }
 }
 
 const pool = mysql.createPool(opts);
