@@ -13,7 +13,8 @@ const poValidators = [
   body('paymentTermTrigger')
     .isIn(['AFTER_PO_ISSUED', 'AFTER_GOODS_RECEIVED'])
     .withMessage('Pemicu termin tidak valid'),
-  body('paymentTermDays').isInt({ min: 0, max: 365 }).withMessage('Hari termin 0-365'),
+  // paymentTermDays kept for backward-compat but now optional
+  body('paymentTermDays').optional().isInt({ min: 0, max: 3650 }),
   body('notes').optional({ nullable: true, checkFalsy: true }).isString(),
   body('lines').isArray({ min: 1 }).withMessage('Minimal satu baris item'),
   body('lines.*.itemName').isString().trim().isLength({ min: 1 }).withMessage('Nama item wajib diisi'),
@@ -21,6 +22,12 @@ const poValidators = [
   body('lines.*.unit').isString().trim().isLength({ min: 1 }).withMessage('Unit wajib diisi'),
   body('lines.*.unitPrice').isFloat({ min: 0 }).withMessage('Harga tidak valid'),
   body('lines.*.ppnIncluded').optional().isBoolean(),
+  // multi-term: optional array, at least 1 if provided
+  body('paymentTerms').optional().isArray({ min: 1 }).withMessage('Minimal satu termin jika diisi'),
+  body('paymentTerms.*.amountType').optional().isIn(['PERCENT', 'FIXED']).withMessage('Tipe termin tidak valid'),
+  body('paymentTerms.*.amountValue').optional().isFloat({ min: 0 }).withMessage('Nilai termin tidak valid'),
+  body('paymentTerms.*.termDays').optional().isInt({ min: 0, max: 3650 }).withMessage('Hari termin 0-3650'),
+  body('paymentTerms.*.label').optional({ nullable: true, checkFalsy: true }).isString(),
 ];
 
 router.use(authRequired);
@@ -40,5 +47,8 @@ router.delete('/:id', superAdminRequired, ctrl.destroy);
 router.post('/:id/confirm', ctrl.confirm);
 router.post('/:id/cancel', ctrl.cancel);
 router.post('/:id/record-receipt', receiptValidators, ctrl.recordReceipt);
+router.patch('/:id/terms/:termId/paid', [
+  body('paidAt').optional({ nullable: true }).isISO8601().withMessage('Tanggal tidak valid'),
+], ctrl.markTermPaid);
 
 module.exports = router;

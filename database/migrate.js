@@ -49,6 +49,44 @@ async function ensureColumn(connection, dbName, table, column, alterSql) {
   return true;
 }
 
+/** Semua tabel yang dipakai aplikasi — harus ada setelah migrate (deploy). */
+const EXPECTED_TABLES = [
+  'users',
+  'customers',
+  'master_items',
+  'customer_pos',
+  'customer_po_lines',
+  'customer_po_payment_terms',
+  'app_settings',
+  'po_number_sequences',
+  'tasks',
+  'bom_versions',
+  'bom_components',
+  'pof_number_sequences',
+  'prod_order_forms',
+  'prod_order_form_lines',
+  'vendors',
+  'pov_number_sequences',
+  'vendor_pos',
+  'vendor_po_lines',
+  'vendor_po_payment_terms',
+];
+
+async function verifySchema(connection, dbName) {
+  const missing = [];
+  for (const table of EXPECTED_TABLES) {
+    if (!(await tableExists(connection, dbName, table))) {
+      missing.push(table);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Verifikasi gagal: tabel belum ada setelah migrate: ${missing.join(', ')}`
+    );
+  }
+  console.log(`[migrate] Verifikasi OK — ${EXPECTED_TABLES.length} tabel siap.`);
+}
+
 async function applyPatches(connection, dbName) {
   const receiptColumns = [
     {
@@ -80,6 +118,82 @@ async function applyPatches(connection, dbName) {
     `ALTER TABLE \`${dbName}\`.customer_pos
      ADD COLUMN ppn_rate DECIMAL(5, 2) NOT NULL DEFAULT 11.00 AFTER due_date`
   );
+
+  await ensureColumn(
+    connection,
+    dbName,
+    'customer_pos',
+    'payment_term_trigger',
+    `ALTER TABLE \`${dbName}\`.customer_pos
+     ADD COLUMN payment_term_trigger ENUM('AFTER_PO_ISSUED', 'AFTER_GOODS_RECEIVED')
+       NOT NULL DEFAULT 'AFTER_PO_ISSUED' AFTER customer_id`
+  );
+
+  await ensureColumn(
+    connection,
+    dbName,
+    'customer_pos',
+    'payment_term_days',
+    `ALTER TABLE \`${dbName}\`.customer_pos
+     ADD COLUMN payment_term_days INT UNSIGNED NOT NULL DEFAULT 14
+       AFTER payment_term_trigger`
+  );
+
+  await ensureColumn(
+    connection,
+    dbName,
+    'customer_pos',
+    'due_date',
+    `ALTER TABLE \`${dbName}\`.customer_pos
+     ADD COLUMN due_date DATE NULL AFTER payment_term_days`
+  );
+
+  if (!(await tableExists(connection, dbName, 'tasks'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.tasks (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        type ENUM('CREATE_BOM') NOT NULL,
+        reference_type VARCHAR(64) NOT NULL,
+        reference_id INT UNSIGNED NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        notes TEXT NULL,
+        assignee_user_id INT UNSIGNED NULL,
+        due_date DATE NULL,
+        status ENUM('OPEN', 'DONE', 'CANCELLED') NOT NULL DEFAULT 'OPEN',
+        done_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_tasks_user FOREIGN KEY (assignee_user_id)
+          REFERENCES \`${dbName}\`.users(id),
+        INDEX idx_tasks_status (status),
+        INDEX idx_tasks_ref (reference_type, reference_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel tasks dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'customer_po_payment_terms'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.customer_po_payment_terms (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        customer_po_id INT UNSIGNED NOT NULL,
+        term_no INT UNSIGNED NOT NULL DEFAULT 1,
+        label VARCHAR(128) NULL,
+        amount_type ENUM('PERCENT','FIXED') NOT NULL DEFAULT 'PERCENT',
+        amount_value DECIMAL(14,2) NOT NULL DEFAULT 0,
+        term_days INT UNSIGNED NOT NULL DEFAULT 0,
+        due_date DATE NULL,
+        paid_at DATE NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_cppt_cpo FOREIGN KEY (customer_po_id)
+          REFERENCES \`${dbName}\`.customer_pos(id) ON DELETE CASCADE,
+        UNIQUE KEY uq_cppt (customer_po_id, term_no),
+        INDEX idx_cppt_cpo (customer_po_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel customer_po_payment_terms dibuat.');
+  }
 
   if (!(await tableExists(connection, dbName, 'app_settings'))) {
     await connection.query(`
@@ -267,6 +381,39 @@ async function applyPatches(connection, dbName) {
     console.log('[migrate] Tabel pov_number_sequences dibuat.');
   }
 
+  await ensureColumn(
+    connection,
+    dbName,
+    'vendor_pos',
+    'payment_term_trigger',
+    `ALTER TABLE \`${dbName}\`.vendor_pos
+     ADD COLUMN payment_term_trigger ENUM('AFTER_PO_ISSUED', 'AFTER_GOODS_RECEIVED')
+       NOT NULL DEFAULT 'AFTER_GOODS_RECEIVED' AFTER vendor_id`
+  );
+
+  if (!(await tableExists(connection, dbName, 'vendor_po_payment_terms'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.vendor_po_payment_terms (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        vendor_po_id INT UNSIGNED NOT NULL,
+        term_no INT UNSIGNED NOT NULL DEFAULT 1,
+        label VARCHAR(128) NULL,
+        amount_type ENUM('PERCENT','FIXED') NOT NULL DEFAULT 'PERCENT',
+        amount_value DECIMAL(14,2) NOT NULL DEFAULT 0,
+        term_days INT UNSIGNED NOT NULL DEFAULT 0,
+        due_date DATE NULL,
+        paid_at DATE NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_vppt_vpo FOREIGN KEY (vendor_po_id)
+          REFERENCES \`${dbName}\`.vendor_pos(id) ON DELETE CASCADE,
+        UNIQUE KEY uq_vppt (vendor_po_id, term_no),
+        INDEX idx_vppt_vpo (vendor_po_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel vendor_po_payment_terms dibuat.');
+  }
+
   if (!(await tableExists(connection, dbName, 'vendor_pos'))) {
     await connection.query(`
       CREATE TABLE IF NOT EXISTS \`${dbName}\`.vendor_pos (
@@ -441,6 +588,7 @@ async function migrate() {
     await connection.query(sql);
     console.log('[migrate] Schema berhasil diterapkan.');
     await applyPatches(connection, dbName);
+    await verifySchema(connection, dbName);
   } finally {
     await connection.end();
   }

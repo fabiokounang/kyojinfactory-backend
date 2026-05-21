@@ -3,6 +3,21 @@ const customerPoModel = require('../models/customerPoModel');
 const customerModel = require('../models/customerModel');
 const { previewFgCode } = require('../services/itemCodeService');
 
+function toPublicTerm(t) {
+  return {
+    id: t.id,
+    termNo: t.term_no,
+    label: t.label,
+    amountType: t.amount_type,
+    amountValue: Number(t.amount_value),
+    termDays: t.term_days,
+    dueDate: t.due_date,
+    paidAt: t.paid_at,
+    createdAt: t.created_at,
+    updatedAt: t.updated_at,
+  };
+}
+
 function toPublicLine(l) {
   return {
     id: l.id,
@@ -45,6 +60,7 @@ function toPublic(po) {
     createdAt: po.created_at,
     updatedAt: po.updated_at,
     lines: (po.lines || []).map(toPublicLine),
+    paymentTerms: (po.paymentTerms || []).map(toPublicTerm),
   };
 }
 
@@ -122,12 +138,9 @@ async function update(req, res, next) {
     if (handleValidation(req, res)) return;
     const existing = await customerPoModel.findById(req.params.id);
     if (!existing) return res.status(404).json({ message: 'PO tidak ditemukan' });
-    if (existing.status !== 'DRAFT') {
-      return res.status(400).json({ message: 'Hanya PO DRAFT yang dapat diubah' });
-    }
     const customer = await customerModel.findById(req.body.customerId);
     if (!customer) return res.status(400).json({ message: 'Customer tidak ditemukan' });
-    const po = await customerPoModel.update(req.params.id, req.body);
+    const po = await customerPoModel.update(req.params.id, req.body, req.user?.id);
     res.json({ data: toPublic(po) });
   } catch (err) {
     next(err);
@@ -198,4 +211,18 @@ async function previewCode(req, res, next) {
   }
 }
 
-module.exports = { index, show, store, update, destroy, confirm, cancel, recordReceipt, previewCode };
+async function markTermPaid(req, res, next) {
+  try {
+    const po = await customerPoModel.markTermPaid(
+      req.params.id,
+      req.params.termId,
+      req.body.paidAt || null
+    );
+    if (!po) return res.status(404).json({ message: 'PO atau termin tidak ditemukan' });
+    res.json({ data: toPublic(po), message: req.body.paidAt ? 'Termin ditandai lunas' : 'Tandai lunas dibatalkan' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { index, show, store, update, destroy, confirm, cancel, recordReceipt, previewCode, markTermPaid };

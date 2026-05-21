@@ -9,6 +9,21 @@ const STATUS_LABELS = {
   CANCELLED: 'Dibatalkan',
 };
 
+function toPublicTerm(t) {
+  return {
+    id: t.id,
+    termNo: t.term_no,
+    label: t.label,
+    amountType: t.amount_type,
+    amountValue: Number(t.amount_value),
+    termDays: t.term_days,
+    dueDate: t.due_date,
+    paidAt: t.paid_at,
+    createdAt: t.created_at,
+    updatedAt: t.updated_at,
+  };
+}
+
 function toPublicLine(l) {
   return {
     id: l.id,
@@ -40,6 +55,7 @@ function toPublic(row) {
       name: row.vendor_name,
       phone: row.vendor_phone,
     },
+    paymentTermTrigger: row.payment_term_trigger || 'AFTER_GOODS_RECEIVED',
     paymentMode: row.payment_mode,
     dpAmount: row.dp_amount ? Number(row.dp_amount) : null,
     dpDueDate: row.dp_due_date,
@@ -59,6 +75,7 @@ function toPublic(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lines: (row.lines || []).map(toPublicLine),
+    paymentTerms: (row.paymentTerms || []).map(toPublicTerm),
   };
 }
 
@@ -94,7 +111,7 @@ async function store(req, res, next) {
   if (handleValidation(req, res)) return;
   try {
     const vpo = await vendorPoModel.create(req.body, req.user?.id);
-    res.status(201).json({ data: toPublic(vpo), message: 'PO Vendor berhasil dibuat' });
+    res.status(201).json({ data: toPublic(vpo), message: 'PO Vendor berhasil disimpan' });
   } catch (err) { next(err); }
 }
 
@@ -103,7 +120,9 @@ async function update(req, res, next) {
   try {
     const existing = await vendorPoModel.findById(req.params.id);
     if (!existing) return res.status(404).json({ message: 'PO Vendor tidak ditemukan' });
-    if (existing.status !== 'DRAFT') return res.status(400).json({ message: 'Hanya PO DRAFT yang dapat diubah' });
+    if (!['CONFIRMED', 'DRAFT'].includes(existing.status)) {
+      return res.status(400).json({ message: 'PO dengan status ' + existing.status + ' tidak dapat diubah' });
+    }
     const vpo = await vendorPoModel.update(req.params.id, req.body);
     res.json({ data: toPublic(vpo), message: 'PO Vendor berhasil diperbarui' });
   } catch (err) { next(err); }
@@ -149,4 +168,18 @@ async function cancelPo(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { index, show, store, update, destroy, confirmPo, receiveGoods, completePo, cancelPo };
+async function markTermPaid(req, res, next) {
+  try {
+    const vpo = await vendorPoModel.markTermPaid(
+      req.params.id,
+      req.params.termId,
+      req.body.paidAt ?? null
+    );
+    if (!vpo) return res.status(404).json({ message: 'PO Vendor tidak ditemukan' });
+    res.json({ data: toPublic(vpo), message: 'Status termin diperbarui' });
+  } catch (err) { next(err); }
+}
+
+module.exports = {
+  index, show, store, update, destroy, confirmPo, receiveGoods, completePo, cancelPo, markTermPaid,
+};

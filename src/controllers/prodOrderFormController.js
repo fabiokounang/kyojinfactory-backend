@@ -74,13 +74,16 @@ async function listPofs(req, res, next) {
 
 async function getEligibleCustomerPos(req, res, next) {
   try {
-    const rows = await prodOrderFormModel.findEligibleCustomerPos();
+    const rows = await prodOrderFormModel.findCandidateCustomerPos();
     res.json({
       data: rows.map((r) => ({
         id: r.id,
         poNumber: r.po_number,
         poDate: r.po_date,
         customer: { id: r.customer_id, code: r.customer_code, name: r.customer_name },
+        linesTotal: r.lines_total,
+        linesWithBom: r.lines_with_bom,
+        isReady: !!r.is_ready,
       })),
     });
   } catch (err) {

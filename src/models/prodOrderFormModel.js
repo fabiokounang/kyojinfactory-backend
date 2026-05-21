@@ -92,36 +92,65 @@ async function findById(id) {
 }
 
 /**
- * PO Customer yang eligible untuk POF:
- * - status CONFIRMED
- * - belum punya POF
- * - setiap baris punya master_item_id yang memiliki BOM ACTIVE
+ * Kandidat PO Customer untuk dropdown POF (termasuk yang BOM belum siap).
+ * is_ready = true hanya jika semua baris punya BOM ACTIVE.
  */
-async function findEligibleCustomerPos() {
+async function findCandidateCustomerPos() {
   const [rows] = await pool.execute(
-    `SELECT cp.id, cp.po_number, cp.po_date,
-            c.id AS customer_id, c.name AS customer_name, c.code AS customer_code
+    `SELECT cp.id, cp.po_number, cp.po_date, cp.status AS cpo_status,
+            c.id AS customer_id, c.name AS customer_name, c.code AS customer_code,
+            COUNT(cpl.id) AS lines_total,
+            SUM(
+              CASE
+                WHEN cpl.master_item_id IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM bom_versions bv
+                   WHERE bv.fg_id = cpl.master_item_id AND bv.status = 'ACTIVE'
+                ) THEN 1
+                ELSE 0
+              END
+            ) AS lines_with_bom
        FROM customer_pos cp
        JOIN customers c ON c.id = cp.customer_id
-      WHERE cp.status = 'CONFIRMED'
+       LEFT JOIN customer_po_lines cpl ON cpl.customer_po_id = cp.id
+      WHERE cp.status IN ('CONFIRMED', 'IN_PRODUCTION')
         AND NOT EXISTS (
-          SELECT 1 FROM prod_order_forms pof WHERE pof.customer_po_id = cp.id
-            AND pof.status <> 'CANCELLED'
+          SELECT 1 FROM prod_order_forms pof
+           WHERE pof.customer_po_id = cp.id AND pof.status <> 'CANCELLED'
         )
-        AND NOT EXISTS (
-          SELECT 1 FROM customer_po_lines cpl
-           WHERE cpl.customer_po_id = cp.id
-             AND (
-               cpl.master_item_id IS NULL
-               OR NOT EXISTS (
-                 SELECT 1 FROM bom_versions bv
-                  WHERE bv.fg_id = cpl.master_item_id AND bv.status = 'ACTIVE'
-               )
-             )
-        )
-      ORDER BY cp.po_date ASC`
+      GROUP BY cp.id, cp.po_number, cp.po_date, cp.status,
+               c.id, c.name, c.code
+     HAVING lines_total > 0
+      ORDER BY cp.po_date DESC`
   );
-  return rows;
+  return rows.map((r) => ({
+    ...r,
+    lines_total: Number(r.lines_total),
+    lines_with_bom: Number(r.lines_with_bom),
+    is_ready: Number(r.lines_with_bom) === Number(r.lines_total),
+  }));
+}
+
+/** PO yang sudah siap 100% (semua baris punya BOM ACTIVE) — untuk validasi create */
+async function findEligibleCustomerPos() {
+  const candidates = await findCandidateCustomerPos();
+  return candidates.filter((r) => r.is_ready);
+}
+
+async function assertPoReadyForPof(customerPoId) {
+  const candidates = await findCandidateCustomerPos();
+  const po = candidates.find((r) => r.id === Number(customerPoId));
+  if (!po) {
+    const err = new Error('PO Customer tidak ditemukan atau sudah memiliki POF');
+    err.status = 400;
+    throw err;
+  }
+  if (!po.is_ready) {
+    const err = new Error(
+      `PO ${po.po_number} belum siap: BOM ACTIVE ${po.lines_with_bom}/${po.lines_total} item. Selesaikan todo BOM terlebih dahulu.`
+    );
+    err.status = 400;
+    throw err;
+  }
 }
 
 /**
@@ -155,6 +184,8 @@ async function prefill(customerPoId) {
 
 async function create(data) {
   const { customerPoId, supervisorUserId, issuedByUserId, createdBy, notes, lines, dateKey } = data;
+
+  await assertPoReadyForPof(customerPoId);
 
   const conn = await pool.getConnection();
   try {
@@ -349,6 +380,7 @@ module.exports = {
   list,
   findById,
   findEligibleCustomerPos,
+  findCandidateCustomerPos,
   prefill,
   create,
   update,

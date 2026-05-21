@@ -92,6 +92,23 @@ CREATE TABLE IF NOT EXISTS customer_po_lines (
   INDEX idx_cpol_po (customer_po_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS customer_po_payment_terms (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  customer_po_id INT UNSIGNED NOT NULL,
+  term_no INT UNSIGNED NOT NULL DEFAULT 1,
+  label VARCHAR(128) NULL,
+  amount_type ENUM('PERCENT', 'FIXED') NOT NULL DEFAULT 'PERCENT',
+  amount_value DECIMAL(14, 2) NOT NULL DEFAULT 0,
+  term_days INT UNSIGNED NOT NULL DEFAULT 0,
+  due_date DATE NULL,
+  paid_at DATE NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_cppt_cpo FOREIGN KEY (customer_po_id) REFERENCES customer_pos(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_cppt (customer_po_id, term_no),
+  INDEX idx_cppt_cpo (customer_po_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS app_settings (
   setting_key VARCHAR(64) NOT NULL PRIMARY KEY,
   setting_value VARCHAR(255) NOT NULL,
@@ -211,6 +228,7 @@ CREATE TABLE IF NOT EXISTS vendor_pos (
   vendor_ref VARCHAR(128) NULL,
   po_date DATE NOT NULL,
   vendor_id INT UNSIGNED NOT NULL,
+  payment_term_trigger ENUM('AFTER_PO_ISSUED', 'AFTER_GOODS_RECEIVED') NOT NULL DEFAULT 'AFTER_GOODS_RECEIVED',
   payment_mode ENUM('UPFRONT', 'DP_THEN_RECEIPT', 'ON_RECEIPT') NOT NULL DEFAULT 'ON_RECEIPT',
   dp_amount DECIMAL(16, 2) NULL,
   dp_due_date DATE NULL,
@@ -232,6 +250,23 @@ CREATE TABLE IF NOT EXISTS vendor_pos (
   INDEX idx_vpo_status (status),
   INDEX idx_vpo_vendor (vendor_id),
   INDEX idx_vpo_po_date (po_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vendor_po_payment_terms (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  vendor_po_id INT UNSIGNED NOT NULL,
+  term_no INT UNSIGNED NOT NULL DEFAULT 1,
+  label VARCHAR(128) NULL,
+  amount_type ENUM('PERCENT', 'FIXED') NOT NULL DEFAULT 'PERCENT',
+  amount_value DECIMAL(14, 2) NOT NULL DEFAULT 0,
+  term_days INT UNSIGNED NOT NULL DEFAULT 0,
+  due_date DATE NULL,
+  paid_at DATE NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_vppt_vpo FOREIGN KEY (vendor_po_id) REFERENCES vendor_pos(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_vppt (vendor_po_id, term_no),
+  INDEX idx_vppt_vpo (vendor_po_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS vendor_po_lines (
