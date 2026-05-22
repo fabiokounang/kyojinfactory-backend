@@ -70,6 +70,10 @@ const EXPECTED_TABLES = [
   'vendor_pos',
   'vendor_po_lines',
   'vendor_po_payment_terms',
+  'cinv_number_sequences',
+  'vinv_number_sequences',
+  'customer_invoices',
+  'vendor_invoices',
 ];
 
 async function verifySchema(connection, dbName) {
@@ -391,6 +395,44 @@ async function applyPatches(connection, dbName) {
        NOT NULL DEFAULT 'AFTER_GOODS_RECEIVED' AFTER vendor_id`
   );
 
+  // POF: drop UNIQUE on customer_po_id, add qty_produced, expand status enum
+  await (async () => {
+    const [uniqueRows] = await connection.query(
+      `SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'prod_order_forms'
+         AND CONSTRAINT_TYPE = 'UNIQUE' AND CONSTRAINT_NAME = 'customer_po_id'`,
+      [dbName]
+    );
+    if (uniqueRows.length > 0) {
+      await connection.query(`ALTER TABLE \`${dbName}\`.prod_order_forms DROP INDEX \`customer_po_id\``);
+      console.log('[migrate] UNIQUE customer_po_id pada prod_order_forms dihapus.');
+    }
+  })();
+
+  await (async () => {
+    const [rows] = await connection.query(
+      `SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'prod_order_forms' AND COLUMN_NAME = 'status'`,
+      [dbName]
+    );
+    if (rows.length > 0 && !String(rows[0].COLUMN_TYPE).includes('COMPLETED')) {
+      await connection.query(
+        `ALTER TABLE \`${dbName}\`.prod_order_forms
+         MODIFY COLUMN status ENUM('DRAFT','RELEASED','COMPLETED','CANCELLED') NOT NULL DEFAULT 'DRAFT'`
+      );
+      console.log('[migrate] Status prod_order_forms diperluas dengan COMPLETED.');
+    }
+  })();
+
+  await ensureColumn(
+    connection,
+    dbName,
+    'prod_order_form_lines',
+    'qty_produced',
+    `ALTER TABLE \`${dbName}\`.prod_order_form_lines
+     ADD COLUMN qty_produced DECIMAL(14,2) NOT NULL DEFAULT 0 AFTER qty_to_produce`
+  );
+
   if (!(await tableExists(connection, dbName, 'vendor_po_payment_terms'))) {
     await connection.query(`
       CREATE TABLE IF NOT EXISTS \`${dbName}\`.vendor_po_payment_terms (
@@ -573,6 +615,92 @@ async function applyPatches(connection, dbName) {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
     console.log('[migrate] Tabel bom_components dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'cinv_number_sequences'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.cinv_number_sequences (
+        inv_month CHAR(6) NOT NULL PRIMARY KEY,
+        last_seq INT UNSIGNED NOT NULL DEFAULT 0
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel cinv_number_sequences dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'vinv_number_sequences'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.vinv_number_sequences (
+        inv_month CHAR(6) NOT NULL PRIMARY KEY,
+        last_seq INT UNSIGNED NOT NULL DEFAULT 0
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel vinv_number_sequences dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'customer_invoices'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.customer_invoices (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        invoice_number VARCHAR(32) NOT NULL UNIQUE,
+        customer_po_id INT UNSIGNED NOT NULL,
+        customer_po_payment_term_id INT UNSIGNED NULL,
+        invoice_date DATE NOT NULL,
+        due_date DATE NULL,
+        subtotal DECIMAL(16, 2) NOT NULL DEFAULT 0,
+        ppn_amount DECIMAL(16, 2) NOT NULL DEFAULT 0,
+        total DECIMAL(16, 2) NOT NULL DEFAULT 0,
+        status ENUM('DRAFT', 'ISSUED', 'PAID', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
+        paid_at DATE NULL,
+        notes TEXT NULL,
+        created_by INT UNSIGNED NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_cinv_cpo FOREIGN KEY (customer_po_id)
+          REFERENCES \`${dbName}\`.customer_pos(id),
+        CONSTRAINT fk_cinv_term FOREIGN KEY (customer_po_payment_term_id)
+          REFERENCES \`${dbName}\`.customer_po_payment_terms(id) ON DELETE SET NULL,
+        CONSTRAINT fk_cinv_created_by FOREIGN KEY (created_by)
+          REFERENCES \`${dbName}\`.users(id),
+        INDEX idx_cinv_cpo (customer_po_id),
+        INDEX idx_cinv_status (status),
+        INDEX idx_cinv_date (invoice_date)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel customer_invoices dibuat.');
+  }
+
+  if (!(await tableExists(connection, dbName, 'vendor_invoices'))) {
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`${dbName}\`.vendor_invoices (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        invoice_number VARCHAR(32) NOT NULL UNIQUE,
+        vendor_po_id INT UNSIGNED NOT NULL,
+        vendor_invoice_number VARCHAR(128) NULL,
+        vendor_po_payment_term_id INT UNSIGNED NULL,
+        received_date DATE NULL,
+        invoice_date DATE NOT NULL,
+        due_date DATE NULL,
+        subtotal DECIMAL(16, 2) NOT NULL DEFAULT 0,
+        ppn_amount DECIMAL(16, 2) NOT NULL DEFAULT 0,
+        total DECIMAL(16, 2) NOT NULL DEFAULT 0,
+        status ENUM('DRAFT', 'VERIFIED', 'PAID', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
+        paid_at DATE NULL,
+        notes TEXT NULL,
+        created_by INT UNSIGNED NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_vinv_vpo FOREIGN KEY (vendor_po_id)
+          REFERENCES \`${dbName}\`.vendor_pos(id),
+        CONSTRAINT fk_vinv_term FOREIGN KEY (vendor_po_payment_term_id)
+          REFERENCES \`${dbName}\`.vendor_po_payment_terms(id) ON DELETE SET NULL,
+        CONSTRAINT fk_vinv_created_by FOREIGN KEY (created_by)
+          REFERENCES \`${dbName}\`.users(id),
+        INDEX idx_vinv_vpo (vendor_po_id),
+        INDEX idx_vinv_status (status),
+        INDEX idx_vinv_date (invoice_date)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    console.log('[migrate] Tabel vendor_invoices dibuat.');
   }
 }
 

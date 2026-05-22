@@ -31,6 +31,7 @@ const LINE_COLS = [
   'l.line_no',
   'l.product_number',
   'l.qty_to_produce',
+  'l.qty_produced',
   'l.unit',
   'l.bom_version_id',
   'l.start_date',
@@ -44,7 +45,7 @@ const LINE_COLS = [
   'bv.status AS bom_version_status',
 ].join(', ');
 
-function headerQuery(where = '', params = {}) {
+function headerQuery(where = '', params = {}, limit = '') {
   return pool.execute(
     `SELECT ${HEADER_COLS}
        FROM prod_order_forms p
@@ -54,12 +55,13 @@ function headerQuery(where = '', params = {}) {
        LEFT JOIN users iu ON iu.id = p.issued_by_user_id
        LEFT JOIN users bu ON bu.id = p.created_by
       ${where}
-      ORDER BY p.created_at DESC`,
+      ORDER BY p.created_at DESC
+      ${limit}`,
     params
   );
 }
 
-async function list({ status, search } = {}) {
+async function list({ status, search, customerPoId } = {}) {
   const where = [];
   const params = {};
   if (status) {
@@ -70,13 +72,17 @@ async function list({ status, search } = {}) {
     where.push('(p.pof_number LIKE :s OR cp.po_number LIKE :s OR c.name LIKE :s)');
     params.s = `%${search}%`;
   }
+  if (customerPoId) {
+    where.push('p.customer_po_id = :customerPoId');
+    params.customerPoId = customerPoId;
+  }
   const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const [rows] = await headerQuery(clause, params);
   return rows;
 }
 
 async function findById(id) {
-  const [rows] = await headerQuery('WHERE p.id = :id LIMIT 1', { id });
+  const [rows] = await headerQuery('WHERE p.id = :id', { id }, 'LIMIT 1');
   const header = rows[0] || null;
   if (!header) return null;
   const [lines] = await pool.execute(
@@ -92,14 +98,55 @@ async function findById(id) {
 }
 
 /**
- * Kandidat PO Customer untuk dropdown POF (termasuk yang BOM belum siap).
- * is_ready = true hanya jika semua baris punya BOM ACTIVE.
+ * Menghitung alokasi qty per customer_po_line_id untuk suatu PO.
+ * Mengembalikan Map: customerPoLineId -> { poQty, allocated, remaining }
+ * excludePofId: abaikan POF tertentu (untuk saat edit DRAFT)
+ */
+async function getLineAllocation(customerPoId, excludePofId = null) {
+  // Qty dari PO Customer
+  const [poLines] = await pool.execute(
+    `SELECT id AS customer_po_line_id, qty AS po_qty
+       FROM customer_po_lines WHERE customer_po_id = :cpoid`,
+    { cpoid: customerPoId }
+  );
+
+  // Total teralokasi per baris (dari semua POF non-CANCELLED kecuali yang di-exclude)
+  const [allocRows] = await pool.execute(
+    `SELECT pofl.customer_po_line_id, SUM(pofl.qty_to_produce) AS allocated
+       FROM prod_order_form_lines pofl
+       JOIN prod_order_forms pof ON pof.id = pofl.prod_order_form_id
+      WHERE pof.customer_po_id = :cpoid
+        AND pof.status <> 'CANCELLED'
+        ${excludePofId ? 'AND pof.id <> :exclude_id' : ''}
+      GROUP BY pofl.customer_po_line_id`,
+    excludePofId ? { cpoid: customerPoId, exclude_id: excludePofId } : { cpoid: customerPoId }
+  );
+
+  const allocMap = new Map(allocRows.map((r) => [r.customer_po_line_id, Number(r.allocated)]));
+
+  const result = new Map();
+  for (const pl of poLines) {
+    const poQty = Number(pl.po_qty);
+    const allocated = allocMap.get(pl.customer_po_line_id) || 0;
+    result.set(Number(pl.customer_po_line_id), {
+      poQty,
+      allocated,
+      remaining: Math.max(0, poQty - allocated),
+    });
+  }
+  return result;
+}
+
+/**
+ * Kandidat PO Customer untuk dropdown POF.
+ * Menggunakan multi-POF: PO muncul selama masih ada sisa qty belum teralokasi
+ * dan BOM ACTIVE lengkap.
  */
 async function findCandidateCustomerPos() {
   const [rows] = await pool.execute(
     `SELECT cp.id, cp.po_number, cp.po_date, cp.status AS cpo_status,
             c.id AS customer_id, c.name AS customer_name, c.code AS customer_code,
-            COUNT(cpl.id) AS lines_total,
+            COUNT(DISTINCT cpl.id) AS lines_total,
             SUM(
               CASE
                 WHEN cpl.master_item_id IS NOT NULL AND EXISTS (
@@ -108,15 +155,18 @@ async function findCandidateCustomerPos() {
                 ) THEN 1
                 ELSE 0
               END
-            ) AS lines_with_bom
+            ) AS lines_with_bom,
+            SUM(cpl.qty) AS total_po_qty,
+            COALESCE((
+              SELECT SUM(pofl.qty_to_produce)
+                FROM prod_order_form_lines pofl
+                JOIN prod_order_forms pof ON pof.id = pofl.prod_order_form_id
+               WHERE pof.customer_po_id = cp.id AND pof.status <> 'CANCELLED'
+            ), 0) AS total_allocated
        FROM customer_pos cp
        JOIN customers c ON c.id = cp.customer_id
        LEFT JOIN customer_po_lines cpl ON cpl.customer_po_id = cp.id
       WHERE cp.status IN ('CONFIRMED', 'IN_PRODUCTION')
-        AND NOT EXISTS (
-          SELECT 1 FROM prod_order_forms pof
-           WHERE pof.customer_po_id = cp.id AND pof.status <> 'CANCELLED'
-        )
       GROUP BY cp.id, cp.po_number, cp.po_date, cp.status,
                c.id, c.name, c.code
      HAVING lines_total > 0
@@ -126,21 +176,25 @@ async function findCandidateCustomerPos() {
     ...r,
     lines_total: Number(r.lines_total),
     lines_with_bom: Number(r.lines_with_bom),
+    total_po_qty: Number(r.total_po_qty),
+    total_allocated: Number(r.total_allocated),
+    remaining_qty: Math.max(0, Number(r.total_po_qty) - Number(r.total_allocated)),
     is_ready: Number(r.lines_with_bom) === Number(r.lines_total),
+    has_remaining: Number(r.total_po_qty) > Number(r.total_allocated),
   }));
 }
 
-/** PO yang sudah siap 100% (semua baris punya BOM ACTIVE) — untuk validasi create */
+/** PO yang siap: BOM ACTIVE lengkap dan masih ada sisa qty */
 async function findEligibleCustomerPos() {
   const candidates = await findCandidateCustomerPos();
-  return candidates.filter((r) => r.is_ready);
+  return candidates.filter((r) => r.is_ready && r.has_remaining);
 }
 
 async function assertPoReadyForPof(customerPoId) {
   const candidates = await findCandidateCustomerPos();
   const po = candidates.find((r) => r.id === Number(customerPoId));
   if (!po) {
-    const err = new Error('PO Customer tidak ditemukan atau sudah memiliki POF');
+    const err = new Error('PO Customer tidak ditemukan atau tidak valid untuk POF');
     err.status = 400;
     throw err;
   }
@@ -151,11 +205,46 @@ async function assertPoReadyForPof(customerPoId) {
     err.status = 400;
     throw err;
   }
+  if (!po.has_remaining) {
+    const err = new Error(
+      `PO ${po.po_number} sudah terisi penuh: semua qty sudah dialokasikan ke POF.`
+    );
+    err.status = 400;
+    throw err;
+  }
+}
+
+/**
+ * Validasi baris POF: qty_to_produce tiap baris tidak melebihi sisa PO.
+ * allocMap: hasil getLineAllocation
+ */
+function validateLineQty(lines, allocMap) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const alloc = allocMap.get(Number(line.customerPoLineId));
+    if (!alloc) {
+      const err = new Error(`Baris ${i + 1}: customer PO line tidak valid`);
+      err.status = 400;
+      throw err;
+    }
+    if (Number(line.qtyToProduce) > alloc.remaining) {
+      const err = new Error(
+        `Baris ${i + 1}: qty ${line.qtyToProduce} melebihi sisa PO (sisa: ${alloc.remaining})`
+      );
+      err.status = 400;
+      throw err;
+    }
+    if (Number(line.qtyToProduce) <= 0) {
+      const err = new Error(`Baris ${i + 1}: qty harus lebih dari 0`);
+      err.status = 400;
+      throw err;
+    }
+  }
 }
 
 /**
  * Prefill data untuk membuat POF baru dari PO Customer:
- * header info + lines dengan bom ACTIVE per FG
+ * header info + lines dengan bom ACTIVE per FG + info sisa qty
  */
 async function prefill(customerPoId) {
   const [poRows] = await pool.execute(
@@ -169,6 +258,8 @@ async function prefill(customerPoId) {
   if (!poRows.length) return null;
   const po = poRows[0];
 
+  const allocMap = await getLineAllocation(customerPoId);
+
   const [lines] = await pool.execute(
     `SELECT cpl.id AS customer_po_line_id, cpl.line_no, cpl.item_name, cpl.item_code AS product_number,
             cpl.qty, cpl.unit, cpl.master_item_id,
@@ -179,7 +270,22 @@ async function prefill(customerPoId) {
       ORDER BY cpl.line_no ASC`,
     { id: customerPoId }
   );
-  return { po, lines };
+
+  const enrichedLines = lines.map((l) => {
+    const alloc = allocMap.get(Number(l.customer_po_line_id)) || {
+      poQty: Number(l.qty),
+      allocated: 0,
+      remaining: Number(l.qty),
+    };
+    return {
+      ...l,
+      po_qty: alloc.poQty,
+      allocated_qty: alloc.allocated,
+      remaining_qty: alloc.remaining,
+    };
+  });
+
+  return { po, lines: enrichedLines };
 }
 
 async function create(data) {
@@ -190,6 +296,10 @@ async function create(data) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
+
+    // Validate qty against remaining within transaction
+    const allocMap = await getLineAllocation(customerPoId);
+    validateLineQty(lines, allocMap);
 
     const pofNumber = await nextPofNumber(conn, dateKey);
 
@@ -226,6 +336,28 @@ async function update(id, data) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
+
+    const [existingRows] = await conn.execute(
+      `SELECT id, status, customer_po_id FROM prod_order_forms WHERE id = :id LIMIT 1`,
+      { id }
+    );
+    const existing = existingRows[0];
+    if (!existing) {
+      const err = new Error('POF tidak ditemukan');
+      err.status = 404;
+      throw err;
+    }
+    if (existing.status !== 'DRAFT') {
+      const err = new Error('Hanya POF berstatus DRAFT yang dapat diubah');
+      err.status = 400;
+      throw err;
+    }
+
+    // Validate qty — exclude current POF from allocation count
+    if (lines && lines.length > 0) {
+      const allocMap = await getLineAllocation(existing.customer_po_id, id);
+      validateLineQty(lines, allocMap);
+    }
 
     await conn.execute(
       `UPDATE prod_order_forms
@@ -320,6 +452,75 @@ async function release(id) {
   }
 }
 
+/**
+ * Catat qty produksi untuk satu baris POF.
+ * Jika semua baris POF sudah mencapai qty_to_produce → otomatis COMPLETED.
+ */
+async function recordProduction(pofId, lineId, qtyProduced) {
+  const pof = await findById(pofId);
+  if (!pof) {
+    const err = new Error('POF tidak ditemukan');
+    err.status = 404;
+    throw err;
+  }
+  if (pof.status !== 'RELEASED') {
+    const err = new Error('Hanya POF berstatus RELEASED yang dapat dicatat produksinya');
+    err.status = 400;
+    throw err;
+  }
+  const line = pof.lines.find((l) => l.id === Number(lineId));
+  if (!line) {
+    const err = new Error('Baris POF tidak ditemukan');
+    err.status = 404;
+    throw err;
+  }
+  if (Number(qtyProduced) < 0) {
+    const err = new Error('Qty produksi tidak boleh negatif');
+    err.status = 400;
+    throw err;
+  }
+  if (Number(qtyProduced) > Number(line.qty_to_produce)) {
+    const err = new Error(
+      `Qty produksi (${qtyProduced}) melebihi plafon POF baris ini (${line.qty_to_produce})`
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    await conn.execute(
+      `UPDATE prod_order_form_lines SET qty_produced = :qty WHERE id = :id AND prod_order_form_id = :pof_id`,
+      { qty: Number(qtyProduced), id: lineId, pof_id: pofId }
+    );
+
+    // Auto-COMPLETED jika semua baris penuh
+    const [allLines] = await conn.execute(
+      `SELECT qty_to_produce, qty_produced FROM prod_order_form_lines WHERE prod_order_form_id = :pof_id`,
+      { pof_id: pofId }
+    );
+    const allDone = allLines.every(
+      (l) => Number(l.qty_produced) >= Number(l.qty_to_produce)
+    );
+    if (allDone) {
+      await conn.execute(
+        `UPDATE prod_order_forms SET status = 'COMPLETED' WHERE id = :id`,
+        { id: pofId }
+      );
+    }
+
+    await conn.commit();
+    return findById(pofId);
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
 async function cancel(id) {
   const existing = await findById(id);
   if (!existing) {
@@ -327,8 +528,8 @@ async function cancel(id) {
     err.status = 404;
     throw err;
   }
-  if (existing.status === 'RELEASED') {
-    const err = new Error('POF yang sudah di-release tidak dapat dibatalkan');
+  if (existing.status === 'RELEASED' || existing.status === 'COMPLETED') {
+    const err = new Error('POF yang sudah di-release atau selesai tidak dapat dibatalkan');
     err.status = 400;
     throw err;
   }
@@ -381,10 +582,12 @@ module.exports = {
   findById,
   findEligibleCustomerPos,
   findCandidateCustomerPos,
+  getLineAllocation,
   prefill,
   create,
   update,
   release,
+  recordProduction,
   cancel,
   destroy,
 };

@@ -78,7 +78,7 @@ function maxDueDate(terms) {
   return terms.reduce((m, t) => (!t.due_date ? m : !m || t.due_date > m ? t.due_date : m), null);
 }
 
-async function headerQuery(where, params) {
+async function headerQuery(where, params, limit = '') {
   return pool.execute(
     `SELECT ${HEADER_COLS}
        FROM vendor_pos vp
@@ -86,7 +86,8 @@ async function headerQuery(where, params) {
        LEFT JOIN users u ON u.id = vp.created_by
        LEFT JOIN users ru ON ru.id = vp.received_by
       ${where}
-      ORDER BY vp.po_date DESC, vp.id DESC`,
+      ORDER BY vp.po_date DESC, vp.id DESC
+      ${limit}`,
     params
   );
 }
@@ -106,7 +107,7 @@ async function list({ status, vendorId, search } = {}) {
 }
 
 async function findById(id) {
-  const [rows] = await headerQuery('WHERE vp.id = :id LIMIT 1', { id });
+  const [rows] = await headerQuery('WHERE vp.id = :id', { id }, 'LIMIT 1');
   const header = rows[0] || null;
   if (!header) return null;
   const [lines] = await pool.execute(

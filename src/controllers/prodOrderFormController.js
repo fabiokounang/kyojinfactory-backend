@@ -2,6 +2,8 @@ const { validationResult } = require('express-validator');
 const prodOrderFormModel = require('../models/prodOrderFormModel');
 
 function toPublicLine(l) {
+  const qtyToProduce = Number(l.qty_to_produce);
+  const qtyProduced = Number(l.qty_produced || 0);
   return {
     id: l.id,
     prodOrderFormId: l.prod_order_form_id,
@@ -10,7 +12,9 @@ function toPublicLine(l) {
     productNumber: l.product_number,
     itemName: l.item_name,
     cpoQty: l.cpo_qty ? Number(l.cpo_qty) : null,
-    qtyToProduce: Number(l.qty_to_produce),
+    qtyToProduce,
+    qtyProduced,
+    remainingOnPofLine: Math.max(0, qtyToProduce - qtyProduced),
     unit: l.unit,
     bomVersionId: l.bom_version_id,
     bomVersionName: l.bom_version_name,
@@ -64,8 +68,12 @@ function handleValidation(req, res) {
 
 async function listPofs(req, res, next) {
   try {
-    const { status, search } = req.query;
-    const rows = await prodOrderFormModel.list({ status, search });
+    const { status, search, customerPoId } = req.query;
+    const rows = await prodOrderFormModel.list({
+      status,
+      search,
+      customerPoId: customerPoId ? Number(customerPoId) : undefined,
+    });
     res.json({ data: rows.map(toPublic) });
   } catch (err) {
     next(err);
@@ -84,6 +92,10 @@ async function getEligibleCustomerPos(req, res, next) {
         linesTotal: r.lines_total,
         linesWithBom: r.lines_with_bom,
         isReady: !!r.is_ready,
+        hasRemaining: !!r.has_remaining,
+        remainingQty: r.remaining_qty,
+        allocatedQty: r.total_allocated,
+        poQty: r.total_po_qty,
       })),
     });
   } catch (err) {
@@ -110,6 +122,9 @@ async function getPrefill(req, res, next) {
           itemName: l.item_name,
           productNumber: l.product_number,
           cpoQty: Number(l.qty),
+          poQty: Number(l.po_qty || l.qty),
+          allocatedQty: Number(l.allocated_qty || 0),
+          remainingQty: Number(l.remaining_qty ?? l.qty),
           unit: l.unit,
           masterItemId: l.master_item_id,
           bomVersionId: l.bom_version_id,
@@ -205,6 +220,18 @@ async function cancelPof(req, res, next) {
   }
 }
 
+async function recordProduction(req, res, next) {
+  if (handleValidation(req, res)) return;
+  try {
+    const { id, lineId } = req.params;
+    const { qtyProduced } = req.body;
+    const pof = await prodOrderFormModel.recordProduction(Number(id), Number(lineId), Number(qtyProduced));
+    res.json({ data: toPublic(pof), message: 'Qty produksi berhasil dicatat' });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   listPofs,
   getEligibleCustomerPos,
@@ -215,4 +242,5 @@ module.exports = {
   deletePof,
   releasePof,
   cancelPof,
+  recordProduction,
 };

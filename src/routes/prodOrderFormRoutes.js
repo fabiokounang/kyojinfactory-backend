@@ -31,4 +31,10 @@ router.delete('/:id', ctrl.deletePof);
 router.post('/:id/release', ctrl.releasePof);
 router.post('/:id/cancel', ctrl.cancelPof);
 
+router.patch(
+  '/:id/lines/:lineId/production',
+  [body('qtyProduced').isFloat({ min: 0 }).withMessage('qtyProduced harus angka >= 0')],
+  ctrl.recordProduction
+);
+
 module.exports = router;

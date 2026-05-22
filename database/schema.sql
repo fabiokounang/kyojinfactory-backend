@@ -166,8 +166,8 @@ CREATE TABLE IF NOT EXISTS pof_number_sequences (
 CREATE TABLE IF NOT EXISTS prod_order_forms (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   pof_number VARCHAR(32) NOT NULL UNIQUE,
-  customer_po_id INT UNSIGNED NOT NULL UNIQUE,
-  status ENUM('DRAFT', 'RELEASED', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
+  customer_po_id INT UNSIGNED NOT NULL,
+  status ENUM('DRAFT', 'RELEASED', 'COMPLETED', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
   supervisor_user_id INT UNSIGNED NULL,
   issued_by_user_id INT UNSIGNED NULL,
   notes TEXT NULL,
@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS prod_order_form_lines (
   line_no INT UNSIGNED NOT NULL DEFAULT 1,
   product_number VARCHAR(64) NOT NULL,
   qty_to_produce DECIMAL(14, 2) NOT NULL DEFAULT 1,
+  qty_produced DECIMAL(14, 2) NOT NULL DEFAULT 0,
   unit VARCHAR(32) NOT NULL DEFAULT 'pcs',
   bom_version_id INT UNSIGNED NULL,
   start_date DATE NULL,
@@ -286,6 +287,66 @@ CREATE TABLE IF NOT EXISTS vendor_po_lines (
   CONSTRAINT fk_vpol_vpo FOREIGN KEY (vendor_po_id) REFERENCES vendor_pos(id) ON DELETE CASCADE,
   CONSTRAINT fk_vpol_master_item FOREIGN KEY (master_item_id) REFERENCES master_items(id) ON DELETE SET NULL,
   INDEX idx_vpol_vpo (vendor_po_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS cinv_number_sequences (
+  inv_month CHAR(6) NOT NULL PRIMARY KEY,
+  last_seq INT UNSIGNED NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vinv_number_sequences (
+  inv_month CHAR(6) NOT NULL PRIMARY KEY,
+  last_seq INT UNSIGNED NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS customer_invoices (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  invoice_number VARCHAR(32) NOT NULL UNIQUE,
+  customer_po_id INT UNSIGNED NOT NULL,
+  customer_po_payment_term_id INT UNSIGNED NULL,
+  invoice_date DATE NOT NULL,
+  due_date DATE NULL,
+  subtotal DECIMAL(16, 2) NOT NULL DEFAULT 0,
+  ppn_amount DECIMAL(16, 2) NOT NULL DEFAULT 0,
+  total DECIMAL(16, 2) NOT NULL DEFAULT 0,
+  status ENUM('DRAFT', 'ISSUED', 'PAID', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
+  paid_at DATE NULL,
+  notes TEXT NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_cinv_cpo FOREIGN KEY (customer_po_id) REFERENCES customer_pos(id),
+  CONSTRAINT fk_cinv_term FOREIGN KEY (customer_po_payment_term_id) REFERENCES customer_po_payment_terms(id) ON DELETE SET NULL,
+  CONSTRAINT fk_cinv_created_by FOREIGN KEY (created_by) REFERENCES users(id),
+  INDEX idx_cinv_cpo (customer_po_id),
+  INDEX idx_cinv_status (status),
+  INDEX idx_cinv_date (invoice_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vendor_invoices (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  invoice_number VARCHAR(32) NOT NULL UNIQUE,
+  vendor_po_id INT UNSIGNED NOT NULL,
+  vendor_invoice_number VARCHAR(128) NULL,
+  vendor_po_payment_term_id INT UNSIGNED NULL,
+  received_date DATE NULL,
+  invoice_date DATE NOT NULL,
+  due_date DATE NULL,
+  subtotal DECIMAL(16, 2) NOT NULL DEFAULT 0,
+  ppn_amount DECIMAL(16, 2) NOT NULL DEFAULT 0,
+  total DECIMAL(16, 2) NOT NULL DEFAULT 0,
+  status ENUM('DRAFT', 'VERIFIED', 'PAID', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
+  paid_at DATE NULL,
+  notes TEXT NULL,
+  created_by INT UNSIGNED NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_vinv_vpo FOREIGN KEY (vendor_po_id) REFERENCES vendor_pos(id),
+  CONSTRAINT fk_vinv_term FOREIGN KEY (vendor_po_payment_term_id) REFERENCES vendor_po_payment_terms(id) ON DELETE SET NULL,
+  CONSTRAINT fk_vinv_created_by FOREIGN KEY (created_by) REFERENCES users(id),
+  INDEX idx_vinv_vpo (vendor_po_id),
+  INDEX idx_vinv_status (status),
+  INDEX idx_vinv_date (invoice_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS bom_components (
